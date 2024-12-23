@@ -11,8 +11,6 @@ import json
 
 #setup variables
 main_loop_counter = 0
-light = 301
-light2 = 302
 required_temp = 30
 i2c_bus = SMBus(0)
 bmp280_address = 0x76
@@ -21,17 +19,22 @@ interval = 15
 button1_last_state = 0
 button2_last_state = 0
 button_debounce_time = 0.05
+BH1750_I2C_ADDR = 0x23  # Default I2C address for BH1750
+BH1750_POWER_ON = 0x01         # Power on the module
+BH1750_CONTINUOUS_HIGH_RES_MODE = 0x10  # Continuous high-resolution mode
+
+
 
 # Setup wiring pins
 wiringpi.wiringPiSetup()
 wiringpi.pinMode(2, 1) # Physical pin 7 -> PWM (not in use)
-wiringpi.pinMode(3, 1) # Physical pin 8 -> I2C data
-wiringpi.pinMode(8, 1) # Physical pin 15 -> ultrasonic output (trigger)
-wiringpi.pinMode(9, 0) # Physical pin 16 -> ulttrasonic input (echo)
+# wiringpi.pinMode(3, 1) # Physical pin 8 -> GPIO (not in use)
 wiringpi.pinMode(4, 1) # Physical pin 10 as output -> LED 1
 wiringpi.pinMode(5, 1) # Physical pin 11 as output -> LED 2
 wiringpi.pinMode(6, 0) # Physical pin 12 as input -> Button 1 
 wiringpi.pinMode(7, 0) # Physical pin 13 as input -> Button 2
+wiringpi.pinMode(8, 1) # Physical pin 15 -> ultrasonic output (trigger)
+wiringpi.pinMode(9, 0) # Physical pin 16 -> ulttrasonic input (echo)
 wiringpi.pinMode(10, 1) # Physical pin 18 as output -> relay 1 : heater
 wiringpi.pinMode(16, 1) # Physical pin 26 as output -> relay 2 : cooler
 
@@ -78,7 +81,19 @@ def on_subscribe(mqttc, obj, mid, reason_code_list, properties):
 def on_log(mqttc, obj, level, string):
     print(string)
 
+def read_light():
+    # Send power on command
+    i2c_bus.write_byte(BH1750_I2C_ADDR, BH1750_POWER_ON)
+    time.sleep(0.01)  # Allow sensor to wake up
 
+    # Send command to start measurement in continuous mode
+    i2c_bus.write_byte(BH1750_I2C_ADDR, BH1750_CONTINUOUS_HIGH_RES_MODE)
+    time.sleep(0.2)  # Measurement delay (max 180ms)
+
+    # Read 2 bytes of data (light intensity in lux)
+    data = i2c_bus.read_i2c_block_data(BH1750_I2C_ADDR, 0x00, 2)
+    lux = (data[0] << 8) | data[1]  # Combine the two bytes
+    return lux
 
 # Shared value
 value = 0
@@ -196,26 +211,30 @@ try:
         # Print the distance
         print(f"Distance: {distance:.2f} cm")
 
-        # get the system performance data over 5 seconds.
+        # get the system performance data over 5 seconds:
         cpu_percent = psutil.cpu_percent(interval=5)
         ram_percent = psutil.virtual_memory().percent
-            
+        
+        # get bmp280 sensor data
         bmp280_temp = bmp280.get_temperature()
         bmp280_pressure = bmp280.get_pressure()
         print("Temp: %4.1f, Pressure: %4.1f" % (bmp280_temp, bmp280_pressure))
 
+        # get light level:
+        light_level = read_light()
+        print(f"Light Intensity: {light_level} lux")
+        time.sleep(1)  # Delay between readings
 
-        # Publish it to thingspeak
+        # Publish it to thingspeak:
         main_loop_counter += 1
         print(f"Main loop running, counter: {main_loop_counter}")
-        payload = "field1=" + str(cpu_percent) + "&field2=" + str(ram_percent) + "&field3=" + str(distance) + "&field4=" + str(bmp280_temp) + "&field5=" + str(bmp280_pressure) + "&field6=" + str(light2) + "&field7=" + str("50") + "&field8=" + str(value)
+        payload = "field1=" + str(cpu_percent) + "&field2=" + str(ram_percent) + "&field3=" + str(distance) + "&field4=" + str(bmp280_temp) + "&field5=" + str(bmp280_pressure) + "&field6=" + str(light_level) + "&field7=" + str("50") + "&field8=" + str(value)
         mqttc.publish("channels/2777434/publish", payload)
         
         blink(4)
 
 except KeyboardInterrupt:
     print("Exiting program...")
-
 
 mqttc.loop_stop()
 mqttc.disconnect()
