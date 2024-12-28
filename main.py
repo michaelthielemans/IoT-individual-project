@@ -12,7 +12,7 @@ from evdev import InputDevice, categorize, ecodes
 
 #setup variables
 main_loop_counter = 0
-required_temp = 30
+required_temp = 20
 i2c_bus = SMBus(0)
 bmp280_address = 0x76
 bmp280 = BMP280(i2c_addr= bmp280_address, i2c_dev=i2c_bus)
@@ -81,14 +81,12 @@ def ir_listener():
     for event in device.read_loop():
         # Filter for scan codes (press events only)
         if event.type == ecodes.EV_MSC:
-            print(f"NEC Scan Code: {event.value}")
-            if event.value == 11:
-                required_temp += 1
-        
-        # # Handle key press events only (not release events)
-        # elif event.type == ecodes.EV_KEY and event.value == 1:  # 1 = Key Down
-        #     key_event = categorize(event)
-        #     print(f"Key Pressed: {key_event.keycode}")
+            if event.value == 7:
+                required_temp += 0.5
+            elif event.value == 21:
+                required_temp -= 0.5
+        print(f"required temp set to : {required_temp}")
+        blink_led_fast(5)
 
 # Define callback methods for MQTT
 def on_connect(mqttc, obj, flags, reason_code, properties):
@@ -152,17 +150,13 @@ def handle_buttons():
             with lock:
                 required_temp += 1
                 print(f"Button 1 pressed. Value increased to {required_temp}.")
-            wiringpi.digitalWrite(5, 1)  # Feedback: Turn on LED
-            time.sleep(debounce_time)  # Debounce delay
-            wiringpi.digitalWrite(5, 0)  # Turn off LED
+            blink_led_fast(5)
 
         if button2 and not button2_last_state:  # Button 2 pressed
             with lock:
                 required_temp -= 1
                 print(f"Button 2 pressed. Value decreased to {required_temp}.")
-            wiringpi.digitalWrite(5, 1)  # Feedback: Turn on LED
-            time.sleep(debounce_time)  # Debounce delay
-            wiringpi.digitalWrite(5, 0)  # Turn off LED
+            blink_led_fast(5)
 
         # Update last state
         button1_last_state = button1
@@ -247,7 +241,7 @@ try:
         # Publish it to thingspeak:
         main_loop_counter += 1
         # print(f"Main loop running, counter: {main_loop_counter}")
-        payload = "field1=" + str(cpu_percent) + "&field2=" + str(ram_percent) + "&field3=" + str(distance) + "&field4=" + str(bmp280_temp) + "&field5=" + str(bmp280_pressure) + "&field6=" + str(light_level) + "&field7=" + str("50") + "&field8=" + str(value)
+        payload = "field1=" + str(cpu_percent) + "&field2=" + str(ram_percent) + "&field3=" + str(distance) + "&field4=" + str(bmp280_temp) + "&field5=" + str(bmp280_pressure) + "&field6=" + str(light_level) + "&field7=" + str("50") + "&field8=" + str(required_temp)
         mqttc.publish("channels/2777434/publish", payload)
         
         if motion_detector == 1:
