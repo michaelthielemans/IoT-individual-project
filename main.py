@@ -1,5 +1,4 @@
 import paho.mqtt.client as mqtt
-#from datetime import datetime
 import time
 import psutil
 import wiringpi
@@ -11,38 +10,65 @@ import json
 from evdev import InputDevice, categorize, ecodes
 
 #setup variables
-main_loop_counter = 0
-required_temp = 20
 i2c_bus = SMBus(0)
 bmp280_address = 0x76
 bmp280 = BMP280(i2c_addr= bmp280_address, i2c_dev=i2c_bus)
-interval = 15
 button1_last_state = 0
 button2_last_state = 0
 button_debounce_time = 0.05
-BH1750_I2C_ADDR = 0x23  # Default I2C address for BH1750
-BH1750_POWER_ON = 0x01         # Power on the module
-BH1750_CONTINUOUS_HIGH_RES_MODE = 0x10  # Continuous high-resolution mode
 IR_device_path = '/dev/input/event6'   # Replace '/dev/input/event6' with your IR device path
-# Shared value for button interaction
-value = 0
-motion_detector = 0
-lock = threading.Lock()  # To ensure thread-safe access to 'value'
+distance = 0.0
+distance_thread_lock = threading.Lock()
+required_temp = 20
+topic_required_temp_value = 20
+topic_required_temp_value2 = 20
+required_temp_lock = threading.Lock()  # To ensure thread-safe access to 'value'
+motion_detector = False
+motion_detected_lock = threading.Lock()
 
 # Setup wiring pins
 wiringpi.wiringPiSetup()
-wiringpi.pinMode(2, 1) # Physical pin 7 -> PWM (not in use)
 wiringpi.pinMode(3, 0) # Physical pin 8 as input -> motion detector
-wiringpi.pinMode(4, 1) # Physical pin 10 as output -> LED 1
-wiringpi.pinMode(5, 1) # Physical pin 11 as output -> LED 2
+wiringpi.pinMode(4, 1) # Physical pin 10 as output -> RED LED 1
+wiringpi.pinMode(5, 1) # Physical pin 11 as output -> RGB LED RED
 wiringpi.pinMode(6, 0) # Physical pin 12 as input -> Button 1 
 wiringpi.pinMode(7, 0) # Physical pin 13 as input -> Button 2
 wiringpi.pinMode(8, 1) # Physical pin 15 -> ultrasonic output (trigger)
 wiringpi.pinMode(9, 0) # Physical pin 16 -> ulttrasonic input (echo)
-wiringpi.pinMode(10, 1) # Physical pin 18 as output -> relay 1 : heater
-wiringpi.pinMode(16, 1) # Physical pin 26 as output -> relay 2 : cooler
+wiringpi.pinMode(10, 1) # Physical pin 18 -> as output RGB LED GREEN
+wiringpi.pinMode(11, 1) # Physical pin 19 -> as output RGB LED BLUE
+wiringpi.pinMode(15, 1) # Physical pin 24 as output -> relay 1 : cooler
+wiringpi.pinMode(16, 1) # Physical pin 26 as output -> relay 2 : heater
 
-# define led blinking
+def handle_buttons():
+    global required_temp
+    button1_last_state = 0
+    button2_last_state = 0
+    debounce_time = 0.2  # 200 ms debounce time 
+
+    while True:
+        # Read button states
+        button1 = wiringpi.digitalRead(6)
+        button2 = wiringpi.digitalRead(7)
+
+        if button1 and not button1_last_state:  # Button 1 pressed
+            with required_temp_lock:
+                required_temp += 1
+                print(f"Button 1 pressed. Value increased to {required_temp}.")
+            blink_led_fast(5)
+
+        if button2 and not button2_last_state:  # Button 2 pressed
+            with required_temp_lock:
+                required_temp -= 1
+                print(f"Button 2 pressed. Value decreased to {required_temp}.")
+            blink_led_fast(11)
+
+        # Update last state
+        button1_last_state = button1
+        button2_last_state = button2
+
+        time.sleep(0.05)  # Small delay to avoid busy-looping
+
 def blink_led_fast(led_pin):
     wiringpi.digitalWrite(led_pin, 1)
     time.sleep(0.01)
@@ -82,38 +108,36 @@ def ir_listener():
         # Filter for scan codes (press events only)
         if event.type == ecodes.EV_MSC:
             if event.value == 7:
-                required_temp += 0.5
+                with required_temp_lock:
+                    required_temp += 0.5
+                    blink_led_fast(5)
             elif event.value == 21:
-                required_temp -= 0.5
+                with required_temp_lock:
+                    required_temp -= 0.5
+                    blink_led_fast(11)
         print(f"required temp set to : {required_temp}")
-        blink_led_fast(5)
 
-# Define callback methods for MQTT
+def motion_detection():
+    global motion_detected
+    while True:
+        if wiringpi.digitalRead(3) == 1:
+            motion_detected = True
+            blink_led_fast(10)
+        else:
+            motion_detected = False
+        time.sleep(0.2)
+
 def on_connect(mqttc, obj, flags, reason_code, properties):
     print("reason_code: "+str(reason_code))
 
 def on_message(mqttc, obj, msg):
- 
+    global topic_required_temp_value
+
     print(msg.topic + " " + str(msg.qos) + " " + str(msg.payload))
     data = json.loads(msg.payload)
     
-    # Extract field8 and field4 as integers
-    field8_value = int(data.get('field8', 0))
-    field4_value = int(float(data.get('field4', 0)))
-
-    print(f"Field8 as an integer: {field8_value}")
-    print(f"Field4 as an integer: {field4_value}")
-
-    # Logic to handle heater and cooler
-    if field8_value > field4_value:
-        wiringpi.digitalWrite(10, 1)  # Turn on heater
-        wiringpi.digitalWrite(16, 0)  # Turn off cooler
-    elif field8_value < field4_value:
-        wiringpi.digitalWrite(16, 1)  # Turn on cooler
-        wiringpi.digitalWrite(10, 0)  # Turn off heater
-    else:
-        wiringpi.digitalWrite(10, 0)
-        wiringpi.digitalWrite(16, 0)
+    # Extract field7 as integers
+    topic_required_temp_value = int(float(data.get('field6', 0)))
 
 def on_subscribe(mqttc, obj, mid, reason_code_list, properties):
     print("Subscribed: "+str(mid)+" "+str(reason_code_list))
@@ -121,48 +145,36 @@ def on_subscribe(mqttc, obj, mid, reason_code_list, properties):
 def on_log(mqttc, obj, level, string):
     print(string)
 
-def read_light():
-    # Send power on command
-    i2c_bus.write_byte(BH1750_I2C_ADDR, BH1750_POWER_ON)
-    time.sleep(0.01)  # Allow sensor to wake up
-
-    # Send command to start measurement in continuous mode
-    i2c_bus.write_byte(BH1750_I2C_ADDR, BH1750_CONTINUOUS_HIGH_RES_MODE)
-    time.sleep(0.2)  # Measurement delay (max 180ms)
-
-    # Read 2 bytes of data (light intensity in lux)
-    data = i2c_bus.read_i2c_block_data(BH1750_I2C_ADDR, 0x00, 2)
-    lux = (data[0] << 8) | data[1]  # Combine the two bytes
-    return lux
-
-def handle_buttons():
-    global required_temp
-    button1_last_state = 0
-    button2_last_state = 0
-    debounce_time = 0.2  # 200 ms debounce time 
-
+def measure_distance():
+    global distance
     while True:
-        # Read button states
-        button1 = wiringpi.digitalRead(6)
-        button2 = wiringpi.digitalRead(7)
+        # Trigger the ultrasonic pulse
+        wiringpi.digitalWrite(8, 1)
+        time.sleep(0.00001)  # Wait for 10 microseconds
+        wiringpi.digitalWrite(8, 0)
 
-        if button1 and not button1_last_state:  # Button 1 pressed
-            with lock:
-                required_temp += 1
-                print(f"Button 1 pressed. Value increased to {required_temp}.")
-            blink_led_fast(5)
+        # Wait for the echo to go HIGH
+        while wiringpi.digitalRead(9) == 0:
+            pass
+        signal_high = time.time()
 
-        if button2 and not button2_last_state:  # Button 2 pressed
-            with lock:
-                required_temp -= 1
-                print(f"Button 2 pressed. Value decreased to {required_temp}.")
-            blink_led_fast(5)
+        # Wait for the echo to go LOW
+        while wiringpi.digitalRead(9) == 1:
+            pass
+        signal_low = time.time()
 
-        # Update last state
-        button1_last_state = button1
-        button2_last_state = button2
+        timepassed = signal_low - signal_high
 
-        time.sleep(0.05)  # Small delay to avoid busy-looping
+        # Calculate the distance (speed of sound = 343 m/s or 34300 cm/s)
+        new_distance = timepassed * 17000
+
+        # Safely update the shared distance variable
+        with distance_thread_lock:
+            distance = new_distance
+
+        # Sleep briefly to prevent excessive CPU usage
+        time.sleep(0.1)
+
 
 # start the dedicated thread for the network detection
 traffic_thread = threading.Thread(target=monitor_traffic, daemon=True)
@@ -172,12 +184,19 @@ traffic_thread.start()
 button_thread = threading.Thread(target=handle_buttons, daemon=True)
 button_thread.start()
 
+# start the dedicated thread for the network detection
+motion_detect_thread = threading.Thread(target=motion_detection, daemon=True)
+motion_detect_thread.start()
+
 # Start IR listener in a separate thread
 ir_thread = threading.Thread(target=ir_listener, daemon=True)
 ir_thread.start()
 
-#----- start mqtt connection ----#
+# Start the ultrasonic measurement thread
+distance_thread = threading.Thread(target=measure_distance, daemon=True)
+distance_thread.start()
 
+#----- start mqtt connection ----#
 mqttc = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="LzIIOwAuGSwaFzInGwQ4PCo")
 mqttc.username_pw_set("LzIIOwAuGSwaFzInGwQ4PCo", "uPxk9Tg7VxhgULFqfIctn5q0")
 mqttc.on_message = on_message
@@ -190,63 +209,37 @@ mqttc.subscribe("channels/2777434/subscribe", 0)
 mqttc.loop_start()
 
 try:
+    while True: # Main thread's
 
-    # print("Main thread loop is running. Press Ctrl+C to exit.")
-    while True: # Main thread's independent logic
-        #----- read buttons ----
-        with lock:
-            print(f"Current required temperature: {value}")
-        
-        #-----  ulta-sonic sensor ----- #
-    
-        # # Trigger the ultrasonic pulse
-        # wiringpi.digitalWrite(8, 1)
-        # time.sleep(0.00001)  # Wait for 10 microseconds
-        # wiringpi.digitalWrite(8, 0)
-
-        # # Wait for the echo to go HIGH
-        # while wiringpi.digitalRead(9) == 0:
-        #     pass
-        # signal_high = time.time()
-
-        # # Wait for the echo to go LOW
-        # while wiringpi.digitalRead(9) == 1:
-        #     pass
-        # signal_low = time.time()
-
-        # # Calculate the time difference
-        # timepassed = signal_low - signal_high
-
-        # # Calculate the distance (speed of sound = 343 m/s or 34300 cm/s)
-        # distance = timepassed * 17000
-        distance = 5 #this is a static temporary value delete if ultrasonic is connected
-
-        # # Print the distance
-        # print(f"Distance: {distance:.2f} cm")
-
-        # get the system performance data over 5 seconds:
-        cpu_percent = psutil.cpu_percent(interval=5)
-        ram_percent = psutil.virtual_memory().percent
-        
-        # get bmp280 sensor data
-        bmp280_temp = bmp280.get_temperature()
-        bmp280_pressure = bmp280.get_pressure()
-        print("Temp: %4.1f, Pressure: %4.1f" % (bmp280_temp, bmp280_pressure))
-
-        # get light level:
-        # light_level = read_light()
-        # print(f"Light Intensity: {light_level} lux")
-        light_level = 5 # delete if sensr is connected
+        # pull all metrics and put into a variable
+        cpu_percent_publish = psutil.cpu_percent(interval=5)
+        ram_percent_publish = psutil.virtual_memory().percent
+        bmp280_temp_publish = bmp280.get_temperature()
+        bmp280_pressure_publish = bmp280.get_pressure()
+        with required_temp_lock:
+            required_temp_publish = required_temp
+        with distance_thread_lock:
+            distance_publish = distance
+        with motion_detected_lock:
+            motion_detected_publish = motion_detected
 
         # Publish it to thingspeak:
-        main_loop_counter += 1
-        # print(f"Main loop running, counter: {main_loop_counter}")
-        payload = "field1=" + str(cpu_percent) + "&field2=" + str(ram_percent) + "&field3=" + str(distance) + "&field4=" + str(bmp280_temp) + "&field5=" + str(bmp280_pressure) + "&field6=" + str(light_level) + "&field7=" + str("50") + "&field8=" + str(required_temp)
+        payload = "field1=" + str(cpu_percent_publish) + "&field2=" + str(ram_percent_publish) + "&field3=" + str(distance_publish) + "&field4=" + str(bmp280_temp_publish) + "&field5=" + str(bmp280_pressure_publish) + "&field6=" + str(required_temp_publish)
+        
         mqttc.publish("channels/2777434/publish", payload)
         
-        if motion_detector == 1:
-            print(f"motion is detected in room")
-        
+        if topic_required_temp_value > (bmp280_temp_publish + 0.5):
+            wiringpi.digitalWrite(16,0)
+            wiringpi.digitalWrite(15,1)
+            #print(f"required temp= {required_temp}")
+            #print(f"bmp temp={bmp280_temp_publish}")
+        elif topic_required_temp_value < (bmp280_temp_publish - 0.5):
+            wiringpi.digitalWrite(15,0)
+            wiringpi.digitalWrite(16,1)
+        else:
+            wiringpi.digitalWrite(15,1)
+            wiringpi.digitalWrite(16,1)
+
         time.sleep(20)
 
 except FileNotFoundError:
