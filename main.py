@@ -36,7 +36,7 @@ wiringpi.pinMode(7, 0) # Physical pin 13 as input -> Button 2
 wiringpi.pinMode(8, 1) # Physical pin 15 -> ultrasonic output (trigger)
 wiringpi.pinMode(9, 0) # Physical pin 16 -> ulttrasonic input (echo)
 wiringpi.pinMode(10, 1) # Physical pin 18 -> as output RGB LED GREEN
-wiringpi.pinMode(11, 1) # Physical pin 19 -> as output RGB LED BLUE
+wiringpi.pinMode(13, 1) # Physical pin 19 -> as output RGB LED BLUE
 wiringpi.pinMode(15, 1) # Physical pin 24 as output -> relay 1 : cooler
 wiringpi.pinMode(16, 1) # Physical pin 26 as output -> relay 2 : heater
 
@@ -61,7 +61,7 @@ def handle_buttons():
             with required_temp_lock:
                 required_temp -= 1
                 print(f"Button 2 pressed. Value decreased to {required_temp}.")
-            blink_led_fast(11)
+            blink_led_fast(13)
 
         # Update last state
         button1_last_state = button1
@@ -114,7 +114,7 @@ def ir_listener():
             elif event.value == 21:
                 with required_temp_lock:
                     required_temp -= 0.5
-                    blink_led_fast(11)
+                    blink_led_fast(13)
         print(f"required temp set to : {required_temp}")
 
 def motion_detection():
@@ -215,13 +215,16 @@ try:
         cpu_percent_publish = psutil.cpu_percent(interval=5)
         ram_percent_publish = psutil.virtual_memory().percent
         bmp280_temp_publish = bmp280.get_temperature()
+        print(f"+++--- The current temp = {bmp280_temp_publish} ---+++")
         bmp280_pressure_publish = bmp280.get_pressure()
+        print(f"+++--- The current pressure = {bmp280_pressure_publish} ---+++")
         with required_temp_lock:
             required_temp_publish = required_temp
         with distance_thread_lock:
             distance_publish = distance
         with motion_detected_lock:
             motion_detected_publish = motion_detected
+        print(f"+++--- The current distance = {required_temp_publish} ---+++")
 
         # Publish it to thingspeak:
         payload = "field1=" + str(cpu_percent_publish) + "&field2=" + str(ram_percent_publish) + "&field3=" + str(distance_publish) + "&field4=" + str(bmp280_temp_publish) + "&field5=" + str(bmp280_pressure_publish) + "&field6=" + str(required_temp_publish)
@@ -231,8 +234,6 @@ try:
         if topic_required_temp_value > (bmp280_temp_publish + 0.5):
             wiringpi.digitalWrite(16,0)
             wiringpi.digitalWrite(15,1)
-            #print(f"required temp= {required_temp}")
-            #print(f"bmp temp={bmp280_temp_publish}")
         elif topic_required_temp_value < (bmp280_temp_publish - 0.5):
             wiringpi.digitalWrite(15,0)
             wiringpi.digitalWrite(16,1)
@@ -240,7 +241,7 @@ try:
             wiringpi.digitalWrite(15,1)
             wiringpi.digitalWrite(16,1)
 
-        time.sleep(20)
+        time.sleep(16)
 
 except FileNotFoundError:
     print(f"Device not found: {IR_device_path}. Check your IR device path.")
