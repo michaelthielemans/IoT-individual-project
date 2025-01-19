@@ -15,13 +15,10 @@ bmp280_address = 0x76
 bmp280 = BMP280(i2c_addr= bmp280_address, i2c_dev=i2c_bus)
 button1_last_state = 0
 button2_last_state = 0
-button_debounce_time = 0.05
 IR_device_path = '/dev/input/event6'   # Replace '/dev/input/event6' with your IR device path
 distance = 0.0
 distance_thread_lock = threading.Lock()
-required_temp = 20 # not in use
-topic_required_temp_value = 20 # not in use
-topic_required_temp_value2 = 20
+required_temp = 20
 required_temp_lock = threading.Lock()  # To ensure thread-safe access to 'value'
 motion_detector = False
 motion_detected_lock = threading.Lock()
@@ -232,10 +229,10 @@ try:
         
         mqttc.publish("channels/2777434/publish", payload)
         
-        if topic_required_temp_value > (bmp280_temp_publish + 0.5):
+        if required_temp > (bmp280_temp_publish + 0.5):
             wiringpi.digitalWrite(16,0)
             wiringpi.digitalWrite(15,1)
-        elif topic_required_temp_value < (bmp280_temp_publish - 0.5):
+        elif required_temp < (bmp280_temp_publish - 0.5):
             wiringpi.digitalWrite(15,0)
             wiringpi.digitalWrite(16,1)
         else:
