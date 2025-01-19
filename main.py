@@ -19,8 +19,8 @@ button_debounce_time = 0.05
 IR_device_path = '/dev/input/event6'   # Replace '/dev/input/event6' with your IR device path
 distance = 0.0
 distance_thread_lock = threading.Lock()
-required_temp = 20
-topic_required_temp_value = 20
+required_temp = 20 # not in use
+topic_required_temp_value = 20 # not in use
 topic_required_temp_value2 = 20
 required_temp_lock = threading.Lock()  # To ensure thread-safe access to 'value'
 motion_detector = False
@@ -44,7 +44,7 @@ def handle_buttons():
     global required_temp
     button1_last_state = 0
     button2_last_state = 0
-    debounce_time = 0.2  # 200 ms debounce time 
+    # debounce_time = 0.2  # 200 ms debounce time 
 
     while True:
         # Read button states
@@ -131,13 +131,14 @@ def on_connect(mqttc, obj, flags, reason_code, properties):
     print("reason_code: "+str(reason_code))
 
 def on_message(mqttc, obj, msg):
-    global topic_required_temp_value
+    global required_temp
 
     print(msg.topic + " " + str(msg.qos) + " " + str(msg.payload))
     data = json.loads(msg.payload)
     
     # Extract field7 as integers
-    topic_required_temp_value = int(float(data.get('field6', 0)))
+    with required_temp_lock:
+        required_temp = int(float(data.get('field6', 0)))
 
 def on_subscribe(mqttc, obj, mid, reason_code_list, properties):
     print("Subscribed: "+str(mid)+" "+str(reason_code_list))
