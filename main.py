@@ -16,7 +16,7 @@ bmp280 = BMP280(i2c_addr= bmp280_address, i2c_dev=i2c_bus)
 button1_last_state = 0
 button2_last_state = 0
 IR_device_path = '/dev/input/event6'   # Replace '/dev/input/event6' with your IR device path
-distance = 0.0
+distance = 0
 distance_thread_lock = threading.Lock()
 required_temp = 20
 required_temp_lock = threading.Lock()  # To ensure thread-safe access to 'value'
@@ -51,13 +51,13 @@ def handle_buttons():
         if button1 and not button1_last_state:  # Button 1 pressed
             with required_temp_lock:
                 required_temp += 1
-                print(f"Button 1 pressed. Value increased to {required_temp}.")
+                print(f"Button 1 pressed. Required temp increased to {required_temp}.")
             blink_led_fast(5)
 
         if button2 and not button2_last_state:  # Button 2 pressed
             with required_temp_lock:
                 required_temp -= 1
-                print(f"Button 2 pressed. Value decreased to {required_temp}.")
+                print(f"Button 2 pressed. Required temp decreased to {required_temp}.")
             blink_led_fast(13)
 
         # Update last state
@@ -145,34 +145,36 @@ def on_log(mqttc, obj, level, string):
 
 def measure_distance():
     global distance
-    while True:
-        # Trigger the ultrasonic pulse
-        wiringpi.digitalWrite(8, 1)
-        time.sleep(0.00001)  # Wait for 10 microseconds
-        wiringpi.digitalWrite(8, 0)
+    try:
+        while True:
+            # Trigger the ultrasonic pulse
+            wiringpi.digitalWrite(8, 1)
+            time.sleep(0.00001)  # Wait for 10 microseconds
+            wiringpi.digitalWrite(8, 0)
 
-        # Wait for the echo to go HIGH
-        while wiringpi.digitalRead(9) == 0:
-            pass
-        signal_high = time.time()
+            # Wait for the echo to go HIGH
+            while wiringpi.digitalRead(9) == 0:
+                pass
+            signal_high = time.time()
 
-        # Wait for the echo to go LOW
-        while wiringpi.digitalRead(9) == 1:
-            pass
-        signal_low = time.time()
+            # Wait for the echo to go LOW
+            while wiringpi.digitalRead(9) == 1:
+                pass
+            signal_low = time.time()
 
-        timepassed = signal_low - signal_high
+            timepassed = signal_low - signal_high
 
-        # Calculate the distance (speed of sound = 343 m/s or 34300 cm/s)
-        new_distance = timepassed * 17000
+            # Calculate the distance (speed of sound = 343 m/s or 34300 cm/s)
+            new_distance = timepassed * 17000
 
-        # Safely update the shared distance variable
-        with distance_thread_lock:
-            distance = new_distance
+            # Safely update the shared distance variable
+            with distance_thread_lock:
+                distance = new_distance
 
-        # Sleep briefly to prevent excessive CPU usage
-        time.sleep(0.1)
-
+            # Sleep briefly to prevent excessive CPU usage
+            time.sleep(2)
+    except Exception as e:
+        print(f"Exception in thread: {e}")
 
 # start the dedicated thread for the network detection
 traffic_thread = threading.Thread(target=monitor_traffic, daemon=True)
@@ -222,7 +224,7 @@ try:
             distance_publish = distance
         with motion_detected_lock:
             motion_detected_publish = motion_detected
-        print(f"+++--- The current distance = {required_temp_publish} ---+++")
+        print(f"+++--- The current distance = {distance} ---+++")
 
         # Publish it to thingspeak:
         payload = "field1=" + str(cpu_percent_publish) + "&field2=" + str(ram_percent_publish) + "&field3=" + str(distance_publish) + "&field4=" + str(bmp280_temp_publish) + "&field5=" + str(bmp280_pressure_publish) + "&field6=" + str(required_temp_publish)
